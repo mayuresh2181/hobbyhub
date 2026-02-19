@@ -1,7 +1,12 @@
-name: Test Python Script
+name: NSE Delivery Scanner
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 13 * * *'   # 13:00 UTC ≈ 6:30 PM IST
+
+permissions:
+  contents: write   # IMPORTANT: allows workflow to push changes
 
 jobs:
   run-script:
@@ -10,24 +15,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      - name: Run test script
+      - name: Install dependencies
         run: |
-          python test.py
+          python -m pip install --upgrade pip
+          pip install pandas requests openpyxl
 
-      - name: Show files
+      - name: Run NSE Delivery Script
         run: |
-          ls -la
+          python nse_delivery.py
 
-      - name: Commit changes if any
+      - name: Commit and Push Changes
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
           git add .
-          git diff --cached --quiet || git commit -m "Auto update"
-          git push
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Daily NSE delivery update"
+            git push
+          fi
