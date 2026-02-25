@@ -3,8 +3,8 @@ name: NSE Delivery Scanner
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 1 * * *'   # 7:00 AM IST (Mon–Fri)
-
+    - cron: '35 18 * * *'   # 00:05 IST daily
+    
 permissions:
   contents: write   # IMPORTANT: allows workflow to push changes
 
