@@ -5,8 +5,10 @@ import io
 import time
 import os
 import concurrent.futures
+
 from openpyxl import load_workbook
 from openpyxl.styles import Font
+
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -23,18 +25,20 @@ OUTPUT_FOLDER = os.path.join(BASE_FOLDER, "daily_output")
 TRADING_DAYS_LOOKBACK = 30
 
 MIN_DELIVERY_RATIO = 3
-MIN_DELIVERY_PERCENT = 50
-MIN_VOLUME_RATIO = 2
-MIN_PRICE_CHANGE = 2
 
 MAX_WORKERS = 5
+
+INDEX_FILES = [
+    "ind_nifty500list.csv",
+    "ind_niftymidcap250list.csv"
+]
 
 os.makedirs(LOG_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 
 # =========================================================
-# NSE SESSION
+# CREATE NSE SESSION
 # =========================================================
 
 def create_session():
@@ -54,8 +58,10 @@ def create_session():
 
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
             "Chrome/124.0 Safari/537.36"
         ),
         "Accept-Language": "en-US,en;q=0.9",
@@ -64,34 +70,68 @@ def create_session():
 
     session.headers.update(headers)
 
-    # Warmup request
-    session.get("https://www.nseindia.com", timeout=20)
+    # Warmup
+    session.get(
+        "https://www.nseindia.com",
+        timeout=20
+    )
 
     return session
 
 
 # =========================================================
-# GET NIFTY 500 SYMBOLS
+# GET SYMBOLS
 # =========================================================
 
-def get_nifty500_symbols(session):
+def get_symbols(session):
 
-    print("Fetching NIFTY 500 list...")
+    all_symbols = set()
 
-    url = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
+    for file_name in INDEX_FILES:
 
-    response = session.get(url, timeout=30)
+        print(f"Fetching index file: {file_name}")
 
-    if response.status_code != 200:
-        raise Exception("Unable to fetch NIFTY 500 list")
+        url = (
+            "https://archives.nseindia.com/content/indices/"
+            + file_name
+        )
 
-    df = pd.read_csv(io.StringIO(response.text))
+        try:
 
-    df.columns = df.columns.str.strip().str.upper()
+            response = session.get(
+                url,
+                timeout=30
+            )
 
-    df['SYMBOL'] = df['SYMBOL'].str.strip()
+            if response.status_code != 200:
+                print(f"Failed: {file_name}")
+                continue
 
-    return df['SYMBOL'].unique().tolist()
+            df = pd.read_csv(
+                io.StringIO(response.text)
+            )
+
+            df.columns = (
+                df.columns
+                .str.strip()
+                .str.upper()
+            )
+
+            df['SYMBOL'] = (
+                df['SYMBOL']
+                .astype(str)
+                .str.strip()
+            )
+
+            all_symbols.update(
+                df['SYMBOL'].tolist()
+            )
+
+        except Exception as e:
+
+            print(f"Error: {file_name} -> {e}")
+
+    return sorted(list(all_symbols))
 
 
 # =========================================================
@@ -117,7 +157,7 @@ def get_last_trading_days(n):
 
 
 # =========================================================
-# DOWNLOAD DELIVERY DATA
+# GET DELIVERY DATA
 # =========================================================
 
 def get_delivery_data(date, session):
@@ -127,27 +167,32 @@ def get_delivery_data(date, session):
         f"{date.strftime('%Y%m%d')}.csv"
     )
 
-    # -----------------------------------
-    # LOAD FROM DISK
-    # -----------------------------------
+    # -------------------------------------
+    # LOAD FROM CACHE
+    # -------------------------------------
 
     if os.path.exists(file_path):
 
-        print(f"Loading from disk: {date}")
+        print(f"Loading cached: {date}")
 
         try:
+
             df = pd.read_csv(file_path)
 
-            df['DATE'] = pd.to_datetime(df['DATE']).dt.date
+            df['DATE'] = (
+                pd.to_datetime(df['DATE'])
+                .dt.date
+            )
 
             return df
 
         except Exception as e:
-            print(f"Corrupt cached file for {date}: {e}")
 
-    # -----------------------------------
+            print(f"Corrupt cache {date}: {e}")
+
+    # -------------------------------------
     # DOWNLOAD
-    # -----------------------------------
+    # -------------------------------------
 
     print(f"Downloading: {date}")
 
@@ -158,18 +203,31 @@ def get_delivery_data(date, session):
 
     try:
 
-        response = session.get(url, timeout=30)
+        response = session.get(
+            url,
+            timeout=30
+        )
 
         if response.status_code != 200:
-            print(f"Failed for {date}")
+
+            print(f"Failed: {date}")
+
             return None
 
-        # NSE holiday / invalid file
+        # NSE holiday / invalid response
         if "SYMBOL" not in response.text:
-            print(f"No market data for {date}")
+
+            print(f"No data for: {date}")
+
             return None
 
-        df = pd.read_csv(io.StringIO(response.text))
+        df = pd.read_csv(
+            io.StringIO(response.text)
+        )
+
+        # ---------------------------------
+        # CLEAN COLUMN NAMES
+        # ---------------------------------
 
         df.columns = (
             df.columns
@@ -178,15 +236,23 @@ def get_delivery_data(date, session):
             .str.replace(" ", "_")
         )
 
-        # Clean symbol
-        df['SYMBOL'] = df['SYMBOL'].astype(str).str.strip()
+        # ---------------------------------
+        # CLEAN SYMBOL
+        # ---------------------------------
 
-        # Convert numeric columns
+        df['SYMBOL'] = (
+            df['SYMBOL']
+            .astype(str)
+            .str.strip()
+        )
+
+        # ---------------------------------
+        # NUMERIC CONVERSION
+        # ---------------------------------
+
         numeric_cols = [
             'DELIV_QTY',
-            'TTL_TRD_QNTY',
-            'CLOSE_PRICE',
-            'PREV_CLOSE'
+            'TTL_TRD_QNTY'
         ]
 
         for col in numeric_cols:
@@ -207,8 +273,14 @@ def get_delivery_data(date, session):
 
         df['DATE'] = date
 
-        # Save cache
-        df.to_csv(file_path, index=False)
+        # ---------------------------------
+        # SAVE CACHE
+        # ---------------------------------
+
+        df.to_csv(
+            file_path,
+            index=False
+        )
 
         return df
 
@@ -231,7 +303,7 @@ def download_all_data(trading_days, session):
         max_workers=MAX_WORKERS
     ) as executor:
 
-        future_to_date = {
+        future_map = {
             executor.submit(
                 get_delivery_data,
                 d,
@@ -239,7 +311,9 @@ def download_all_data(trading_days, session):
             ): d for d in trading_days
         }
 
-        for future in concurrent.futures.as_completed(future_to_date):
+        for future in concurrent.futures.as_completed(
+            future_map
+        ):
 
             df = future.result()
 
@@ -262,7 +336,7 @@ def format_excel(output_file):
     # Freeze header
     ws.freeze_panes = "A2"
 
-    # Bold header
+    # Bold headers
     for cell in ws[1]:
         cell.font = Font(bold=True)
 
@@ -270,50 +344,56 @@ def format_excel(output_file):
     for column_cells in ws.columns:
 
         length = max(
-            len(str(cell.value)) if cell.value else 0
+            len(str(cell.value))
+            if cell.value else 0
             for cell in column_cells
         )
 
+        adjusted_width = min(length + 5, 40)
+
         ws.column_dimensions[
             column_cells[0].column_letter
-        ].width = min(length + 5, 40)
+        ].width = adjusted_width
 
     wb.save(output_file)
 
 
 # =========================================================
-# MAIN EXECUTION
+# MAIN
 # =========================================================
 
 def main():
 
-    print("\n======================================")
-    print("RUNNING NSE DELIVERY BREAKOUT SCANNER")
-    print("======================================\n")
+    print("\n========================================")
+    print("NSE DELIVERY BREAKOUT SCANNER")
+    print("========================================\n")
 
     session = create_session()
 
-    # -----------------------------------
-    # SYMBOL LIST
-    # -----------------------------------
+    # -------------------------------------
+    # SYMBOLS
+    # -------------------------------------
 
-    nifty500_symbols = get_nifty500_symbols(session)
+    symbols = get_symbols(session)
 
-    print(f"NIFTY 500 symbols loaded: {len(nifty500_symbols)}")
+    print(f"\nTotal unique symbols: {len(symbols)}")
 
-    # -----------------------------------
+    # -------------------------------------
     # TRADING DAYS
-    # -----------------------------------
+    # -------------------------------------
 
     trading_days = get_last_trading_days(
         TRADING_DAYS_LOOKBACK
     )
 
-    print(f"Trading days fetched: {len(trading_days)}")
+    print(
+        f"Trading days considered: "
+        f"{len(trading_days)}"
+    )
 
-    # -----------------------------------
+    # -------------------------------------
     # DOWNLOAD DATA
-    # -----------------------------------
+    # -------------------------------------
 
     all_data = download_all_data(
         trading_days,
@@ -322,46 +402,49 @@ def main():
 
     if not all_data:
 
-        print("No delivery data available.")
+        print("No delivery data found.")
         return
 
-    # -----------------------------------
-    # COMBINE
-    # -----------------------------------
+    # -------------------------------------
+    # MERGE DATA
+    # -------------------------------------
 
     final_df = pd.concat(
         all_data,
         ignore_index=True
     )
 
-    # NIFTY 500 only
+    # -------------------------------------
+    # FILTER SYMBOLS
+    # -------------------------------------
+
     final_df = final_df[
-        final_df['SYMBOL'].isin(nifty500_symbols)
+        final_df['SYMBOL'].isin(symbols)
     ]
 
-    # -----------------------------------
-    # YESTERDAY
-    # -----------------------------------
+    # -------------------------------------
+    # LATEST DAY
+    # -------------------------------------
 
     available_dates = sorted(
         final_df['DATE'].unique()
     )
 
-    yesterday = available_dates[-1]
+    latest_date = available_dates[-1]
 
-    print(f"\nLatest trading day found: {yesterday}")
+    print(f"\nLatest trading day: {latest_date}")
 
-    yesterday_df = final_df[
-        final_df['DATE'] == yesterday
+    latest_df = final_df[
+        final_df['DATE'] == latest_date
     ].copy()
 
     historical_df = final_df[
-        final_df['DATE'] < yesterday
+        final_df['DATE'] < latest_date
     ].copy()
 
-    # -----------------------------------
-    # HISTORICAL AVERAGES
-    # -----------------------------------
+    # -------------------------------------
+    # AVERAGE DELIVERY
+    # -------------------------------------
 
     avg_delivery = (
         historical_df
@@ -370,190 +453,125 @@ def main():
         .reset_index()
         .rename(
             columns={
-                'DELIV_QTY': 'AVG_30_DELIV_QTY'
+                'DELIV_QTY':
+                'AVG_30_DELIV_QTY'
             }
         )
     )
 
-    avg_volume = (
-        historical_df
-        .groupby('SYMBOL')['TTL_TRD_QNTY']
-        .mean()
-        .reset_index()
-        .rename(
-            columns={
-                'TTL_TRD_QNTY': 'AVG_30_VOLUME'
-            }
-        )
-    )
-
-    # -----------------------------------
+    # -------------------------------------
     # MERGE
-    # -----------------------------------
+    # -------------------------------------
 
     merged = pd.merge(
-        yesterday_df,
+        latest_df,
         avg_delivery,
         on='SYMBOL',
         how='inner'
     )
 
-    merged = pd.merge(
-        merged,
-        avg_volume,
-        on='SYMBOL',
-        how='inner'
-    )
-
-    # -----------------------------------
-    # DELIVERY %
-    # -----------------------------------
-
-    merged['DELIV_PER'] = (
-        merged['DELIV_QTY']
-        / merged['TTL_TRD_QNTY']
-        * 100
-    ).round(2)
-
-    # -----------------------------------
-    # RATIOS
-    # -----------------------------------
+    # -------------------------------------
+    # DELIVERY RATIO
+    # -------------------------------------
 
     merged['DELIVERY_RATIO'] = (
         merged['DELIV_QTY']
         / merged['AVG_30_DELIV_QTY']
     ).round(2)
 
-    merged['VOLUME_RATIO'] = (
-        merged['TTL_TRD_QNTY']
-        / merged['AVG_30_VOLUME']
-    ).round(2)
-
-    # -----------------------------------
-    # PRICE CHANGE
-    # -----------------------------------
-
-    merged['PRICE_CHANGE'] = (
-        (
-            merged['CLOSE_PRICE']
-            - merged['PREV_CLOSE']
-        )
-        / merged['PREV_CLOSE']
-        * 100
-    ).round(2)
-
-    # -----------------------------------
-    # FINAL FILTER
-    # -----------------------------------
+    # -------------------------------------
+    # FILTER
+    # -------------------------------------
 
     result = merged[
-        (merged['DELIVERY_RATIO'] >= MIN_DELIVERY_RATIO)
-        &
-        (merged['DELIV_PER'] >= MIN_DELIVERY_PERCENT)
-        &
-        (merged['VOLUME_RATIO'] >= MIN_VOLUME_RATIO)
-        &
-        (merged['PRICE_CHANGE'] >= MIN_PRICE_CHANGE)
+        merged['DELIVERY_RATIO']
+        >= MIN_DELIVERY_RATIO
     ].copy()
-
-    # -----------------------------------
-    # SORT
-    # -----------------------------------
 
     if result.empty:
 
-        print("\nNo breakout stocks found.")
+        print(
+            "\nNo stocks found with "
+            "delivery breakout."
+        )
+
         return
+
+    # -------------------------------------
+    # SORT
+    # -------------------------------------
 
     result = result.sort_values(
         by='DELIVERY_RATIO',
         ascending=False
     )
 
-    # -----------------------------------
+    # -------------------------------------
     # TRADINGVIEW LINKS
-    # -----------------------------------
+    # -------------------------------------
 
-    result['SYMBOL_LINK'] = result['SYMBOL'].apply(
+    result['SYMBOL_LINK'] = result[
+        'SYMBOL'
+    ].apply(
         lambda x:
         f'=HYPERLINK("https://www.tradingview.com/chart/?symbol=NSE:{x}","{x}")'
     )
 
-    # -----------------------------------
-    # FINAL COLUMNS
-    # -----------------------------------
+    # -------------------------------------
+    # FINAL OUTPUT
+    # -------------------------------------
 
-    final_output = result[
+    output_df = result[
         [
             'SYMBOL_LINK',
             'DELIV_QTY',
             'AVG_30_DELIV_QTY',
-            'DELIVERY_RATIO',
-            'DELIV_PER',
-            'TTL_TRD_QNTY',
-            'AVG_30_VOLUME',
-            'VOLUME_RATIO',
-            'CLOSE_PRICE',
-            'PRICE_CHANGE'
+            'DELIVERY_RATIO'
         ]
     ].copy()
 
-    final_output.columns = [
+    output_df.columns = [
         'SYMBOL',
         'DELIV_QTY',
         'AVG_30_DELIV_QTY',
-        'DELIVERY_RATIO',
-        'DELIV_PER',
-        'TTL_TRD_QNTY',
-        'AVG_30_VOLUME',
-        'VOLUME_RATIO',
-        'CLOSE_PRICE',
-        'PRICE_CHANGE'
+        'DELIVERY_RATIO'
     ]
 
-    # -----------------------------------
-    # SAVE OUTPUT
-    # -----------------------------------
+    # -------------------------------------
+    # SAVE EXCEL
+    # -------------------------------------
 
     output_file = os.path.join(
         OUTPUT_FOLDER,
-        f"delivery_breakout_{yesterday.strftime('%Y%m%d')}.xlsx"
+        f"delivery_breakout_"
+        f"{latest_date.strftime('%Y%m%d')}.xlsx"
     )
 
-    final_output.to_excel(
+    output_df.to_excel(
         output_file,
         index=False,
         engine='openpyxl'
     )
 
-    # Excel formatting
     format_excel(output_file)
 
-    # -----------------------------------
+    # -------------------------------------
     # SUMMARY
-    # -----------------------------------
+    # -------------------------------------
 
-    print("\n======================================")
+    print("\n========================================")
     print("SCAN COMPLETE")
-    print("======================================")
+    print("========================================")
 
-    print(f"\nStocks Found: {len(final_output)}")
+    print(f"\nStocks Found: {len(output_df)}")
 
-    print(f"\nReport Saved:")
+    print(f"\nExcel Report:")
     print(output_file)
 
     print("\nTop Results:\n")
 
     print(
-        final_output[
-            [
-                'SYMBOL',
-                'DELIVERY_RATIO',
-                'DELIV_PER',
-                'VOLUME_RATIO',
-                'PRICE_CHANGE'
-            ]
-        ].head(10)
+        output_df.head(10)
     )
 
 
@@ -563,10 +581,13 @@ def main():
 
 if __name__ == "__main__":
 
-    start = time.time()
+    start_time = time.time()
 
     main()
 
-    end = time.time()
+    end_time = time.time()
 
-    print(f"\nExecution Time: {round(end - start, 2)} seconds")
+    print(
+        f"\nExecution Time: "
+        f"{round(end_time - start_time, 2)} seconds"
+    )
