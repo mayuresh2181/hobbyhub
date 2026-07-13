@@ -20,7 +20,7 @@ LOG_FOLDER = os.path.join(BASE_FOLDER, "daily_logs")
 OUTPUT_FOLDER = os.path.join(BASE_FOLDER, "daily_output")
 
 TRADING_DAYS_LOOKBACK = 30
-MIN_DELIVERY_RATIO = 3
+MIN_DELIVERY_RATIO = 5
 MIN_DELIVERY_VALUE_CR = 20
 MAX_WORKERS = 5
 
@@ -104,7 +104,7 @@ def main():
     latest_df=df[df.DATE==latest].copy()
     hist=df[df.DATE<latest].copy()
 
-    avg=hist.groupby("SYMBOL")["DELIV_QTY"].mean().reset_index(name="AVG_30_DELIVERY")
+    avg=hist.groupby("SYMBOL")["DELIV_QTY"].median().reset_index(name="AVG_30_DELIVERY")
     merged=latest_df.merge(avg,on="SYMBOL",how="inner")
     merged["DELIVERY_RATIO"]=(merged.DELIV_QTY/merged.AVG_30_DELIVERY).round(2)
     merged["DELIVERY_PERCENT"]=(merged.DELIV_QTY/merged.TTL_TRD_QNTY*100).round(2)
