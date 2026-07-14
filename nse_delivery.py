@@ -21,7 +21,7 @@ LOG_FOLDER = os.path.join(BASE_FOLDER, "daily_logs")
 OUTPUT_FOLDER = os.path.join(BASE_FOLDER, "daily_output")
 
 TRADING_DAYS_LOOKBACK = 30
-MIN_DELIVERY_RATIO = 3
+MIN_DELIVERY_RATIO = 1
 MIN_DELIVERY_VALUE_CR = 20
 MIN_HISTORY_DAYS = 15   # require at least this many valid historical days before trusting the average
 MAX_WORKERS = 5
@@ -179,6 +179,12 @@ def main():
     format_excel(outfile)
     print(outfile)
     print(out.head(20))
+
+    print(len(latest_df))
+    print(len(hist))
+    print(len(avg))
+    print(len(merged))
+    print(merged["DELIVERY_RATIO"].describe())
 
 if __name__=="__main__":
     st=time.time()
