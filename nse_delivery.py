@@ -90,6 +90,9 @@ def get_delivery_data(day, session):
     df = pd.read_csv(io.StringIO(r.text))
     df.columns = df.columns.str.strip().str.upper().str.replace(" ", "_")
 
+    print(df.shape)
+    print(df.columns.tolist())
+
     print("Rows before EQ filter:", len(df))
     # strip values too, not just column names -- guards against a
     # trailing-space "EQ " silently failing the series filter and
