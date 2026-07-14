@@ -20,9 +20,9 @@ BASE_FOLDER = "data/nse/delivery"
 LOG_FOLDER = os.path.join(BASE_FOLDER, "daily_logs")
 OUTPUT_FOLDER = os.path.join(BASE_FOLDER, "daily_output")
 
-TRADING_DAYS_LOOKBACK = 30
-MIN_DELIVERY_RATIO = 1
-MIN_DELIVERY_VALUE_CR = 20
+TRADING_DAYS_LOOKBACK = 31
+MIN_DELIVERY_RATIO = 5
+MIN_DELIVERY_VALUE_CR = 50
 MIN_HISTORY_DAYS = 15   # require at least this many valid historical days before trusting the average
 MAX_WORKERS = 5
 
