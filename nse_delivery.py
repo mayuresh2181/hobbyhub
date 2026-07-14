@@ -68,55 +68,111 @@ def _coerce_numeric(df):
     return df
 
 def get_delivery_data(day, session):
+
     print(f"\nProcessing {day}")
 
     fp = os.path.join(LOG_FOLDER, f"{day:%Y%m%d}.csv")
-    
+
+    # =====================================================
+    # CACHE EXISTS
+    # =====================================================
+
     if os.path.exists(fp):
+
         print(f"Using cache: {fp}")
-    else:
-        print(f"Downloading: {day}")
-    fp = os.path.join(LOG_FOLDER, f"{day:%Y%m%d}.csv")
 
-    if os.path.exists(fp):
-        df = pd.read_csv(fp)
-        df["DATE"] = pd.to_datetime(df["DATE"]).dt.date
-        df = _coerce_numeric(df)          # <-- was missing on the cache path
-    else:
-        url = f"https://archives.nseindia.com/products/content/sec_bhavdata_full_{day:%d%m%Y}.csv"
-        r = session.get(url, timeout=30)
-        if r.status_code != 200 or "SYMBOL" not in r.text:
+        try:
+            df = pd.read_csv(fp)
+
+            print("Cache Shape :", df.shape)
+
+            if df.empty:
+                print("Empty cache. Deleting...")
+                os.remove(fp)
+                return None
+
+            df["DATE"] = pd.to_datetime(df["DATE"]).dt.date
+
+            df = _coerce_numeric(df)
+
+        except Exception as e:
+            print(f"Cache read failed : {e}")
+
+            if os.path.exists(fp):
+                os.remove(fp)
+
             return None
-    df = pd.read_csv(io.StringIO(r.text))
-    df.columns = df.columns.str.strip().str.upper().str.replace(" ", "_")
 
-    print(df.shape)
-    print(df.columns.tolist())
+    # =====================================================
+    # DOWNLOAD FROM NSE
+    # =====================================================
 
-    print("Rows before EQ filter:", len(df))
-    # strip values too, not just column names -- guards against a
-    # trailing-space "EQ " silently failing the series filter and
-    # producing a header-only cached file down the line
-    df["SERIES"] = df["SERIES"].astype(str).str.strip()
-    df = df[df["SERIES"] == "EQ"].copy()
-    df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
-    df["DATE"] = day
-    df = _coerce_numeric(df)
+    else:
 
-# drop rows missing the numerics we actually need -- and refuse to
-# cache/return anything that ends up empty, so no header-only /
-# all-NaN frame ever gets written to disk or concatenated later
+        print(f"Downloading: {day}")
+
+        url = (
+            "https://archives.nseindia.com/products/content/"
+            f"sec_bhavdata_full_{day:%d%m%Y}.csv"
+        )
+
+        r = session.get(url, timeout=30)
+
+        if r.status_code != 200:
+            print(f"HTTP Error : {r.status_code}")
+            return None
+
+        if "SYMBOL" not in r.text:
+            print("Invalid bhavcopy")
+            return None
+
+        df = pd.read_csv(io.StringIO(r.text))
+
+        df.columns = (
+            df.columns
+            .str.strip()
+            .str.upper()
+            .str.replace(" ", "_")
+        )
+
+        print("Downloaded Shape :", df.shape)
+
+        df["SERIES"] = df["SERIES"].astype(str).str.strip()
+
+        print("Rows before EQ filter :", len(df))
+
+        df = df[df["SERIES"] == "EQ"].copy()
+
+        print("Rows after EQ filter :", len(df))
+
+        df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
+
+        df["DATE"] = day
+
+        df = _coerce_numeric(df)
+
+    # =====================================================
+    # COMMON VALIDATION
+    # =====================================================
+
     df = df.dropna(subset=NUMERIC_COLS)
 
-    print("Rows after dropna:", len(df))
+    print("Rows after dropna :", len(df))
 
-# If no valid rows, don't cache it.
     if df.empty:
+        print("No valid rows")
+
         if os.path.exists(fp):
             os.remove(fp)
+
         return None
-    
-    df.to_csv(fp, index=False)
+
+    # =====================================================
+    # SAVE ONLY IF NEW DOWNLOAD
+    # =====================================================
+
+    if not os.path.exists(fp):
+        df.to_csv(fp, index=False)
 
     return df
 
