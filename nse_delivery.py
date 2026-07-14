@@ -1,6 +1,7 @@
-
 # NSE Delivery Breakout Scanner - Full NSE EQ Universe
-# Modified version
+# Fixed version: numeric dtype coercion now applied on BOTH the cache-hit
+# and fresh-fetch paths (previously only fresh-fetch), plus min-history-days
+# and divide-by-zero aguards.
 
 import requests
 import datetime as dt
@@ -20,9 +21,12 @@ LOG_FOLDER = os.path.join(BASE_FOLDER, "daily_logs")
 OUTPUT_FOLDER = os.path.join(BASE_FOLDER, "daily_output")
 
 TRADING_DAYS_LOOKBACK = 30
-MIN_DELIVERY_RATIO = 5
+MIN_DELIVERY_RATIO = 3
 MIN_DELIVERY_VALUE_CR = 20
+MIN_HISTORY_DAYS = 15   # require at least this many valid historical days before trusting the average
 MAX_WORKERS = 5
+
+NUMERIC_COLS = ["DELIV_QTY", "TTL_TRD_QNTY", "CLOSE_PRICE"]
 
 os.makedirs(LOG_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -51,25 +55,51 @@ def get_last_days(n):
         d-=dt.timedelta(days=1)
     return sorted(days)
 
-def get_delivery_data(day,session):
-    fp=os.path.join(LOG_FOLDER,f"{day:%Y%m%d}.csv")
+def _coerce_numeric(df):
+    """Force numeric dtype on the columns we do arithmetic on, no matter
+    where the dataframe came from (cache or fresh fetch). This is the
+    single guard that prevents object-dtype columns from ever reaching
+    the division/round() calls downstream."""
+    for c in NUMERIC_COLS:
+        df[c] = pd.to_numeric(
+            df[c].astype(str).str.replace(",", "").str.strip(),
+            errors="coerce"
+        )
+    return df
+
+def get_delivery_data(day, session):
+    fp = os.path.join(LOG_FOLDER, f"{day:%Y%m%d}.csv")
+
     if os.path.exists(fp):
-        df=pd.read_csv(fp)
-        df["DATE"]=pd.to_datetime(df["DATE"]).dt.date
-        return df
-    url=f"https://archives.nseindia.com/products/content/sec_bhavdata_full_{day:%d%m%Y}.csv"
-    r=session.get(url,timeout=30)
-    if r.status_code!=200 or "SYMBOL" not in r.text:
+        df = pd.read_csv(fp)
+        df["DATE"] = pd.to_datetime(df["DATE"]).dt.date
+        df = _coerce_numeric(df)          # <-- was missing on the cache path
+    else:
+        url = f"https://archives.nseindia.com/products/content/sec_bhavdata_full_{day:%d%m%Y}.csv"
+        r = session.get(url, timeout=30)
+        if r.status_code != 200 or "SYMBOL" not in r.text:
+            return None
+        df = pd.read_csv(io.StringIO(r.text))
+        df.columns = df.columns.str.strip().str.upper().str.replace(" ", "_")
+        # strip values too, not just column names -- guards against a
+        # trailing-space "EQ " silently failing the series filter and
+        # producing a header-only cached file down the line
+        df["SERIES"] = df["SERIES"].astype(str).str.strip()
+        df = df[df["SERIES"] == "EQ"].copy()
+        df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
+        df["DATE"] = day
+        df = _coerce_numeric(df)
+
+    # drop rows missing the numerics we actually need -- and refuse to
+    # cache/return anything that ends up empty, so no header-only /
+    # all-NaN frame ever gets written to disk or concatenated later
+    df = df.dropna(subset=NUMERIC_COLS)
+    if df.empty:
         return None
-    df=pd.read_csv(io.StringIO(r.text))
-    df.columns=df.columns.str.strip().str.upper().str.replace(" ","_")
-    df=df[df["SERIES"]=="EQ"].copy()
-    nums=["DELIV_QTY","TTL_TRD_QNTY","CLOSE_PRICE"]
-    for c in nums:
-        df[c]=pd.to_numeric(df[c].astype(str).str.replace(",",""),errors="coerce")
-    df["SYMBOL"]=df["SYMBOL"].astype(str).str.strip()
-    df["DATE"]=day
-    df.to_csv(fp,index=False)
+
+    if not os.path.exists(fp):
+        df.to_csv(fp, index=False)
+
     return df
 
 def download_all(days,session):
@@ -104,7 +134,16 @@ def main():
     latest_df=df[df.DATE==latest].copy()
     hist=df[df.DATE<latest].copy()
 
-    avg=hist.groupby("SYMBOL")["DELIV_QTY"].mean().reset_index(name="AVG_30_DELIVERY")
+    # average delivery qty AND a count of how many valid days back it up
+    grp = hist.groupby("SYMBOL")["DELIV_QTY"]
+    avg = grp.mean().reset_index(name="AVG_30_DELIVERY")
+    counts = grp.count().reset_index(name="N_HIST_DAYS")
+    avg = avg.merge(counts, on="SYMBOL")
+
+    # guard: require a real trailing history, and a non-zero baseline
+    # (a zero/near-zero average turns the ratio into inf or noise)
+    avg = avg[(avg.N_HIST_DAYS >= MIN_HISTORY_DAYS) & (avg.AVG_30_DELIVERY > 0)]
+
     merged=latest_df.merge(avg,on="SYMBOL",how="inner")
     merged["DELIVERY_RATIO"]=(merged.DELIV_QTY/merged.AVG_30_DELIVERY).round(2)
     merged["DELIVERY_PERCENT"]=(merged.DELIV_QTY/merged.TTL_TRD_QNTY*100).round(2)
