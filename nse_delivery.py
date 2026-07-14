@@ -68,6 +68,14 @@ def _coerce_numeric(df):
     return df
 
 def get_delivery_data(day, session):
+    print(f"\nProcessing {day}")
+
+    fp = os.path.join(LOG_FOLDER, f"{day:%Y%m%d}.csv")
+    
+    if os.path.exists(fp):
+        print(f"Using cache: {fp}")
+    else:
+        print(f"Downloading: {day}")
     fp = os.path.join(LOG_FOLDER, f"{day:%Y%m%d}.csv")
 
     if os.path.exists(fp):
@@ -81,6 +89,8 @@ def get_delivery_data(day, session):
             return None
         df = pd.read_csv(io.StringIO(r.text))
         df.columns = df.columns.str.strip().str.upper().str.replace(" ", "_")
+
+        print("Rows before EQ filter:", len(df))
         # strip values too, not just column names -- guards against a
         # trailing-space "EQ " silently failing the series filter and
         # producing a header-only cached file down the line
@@ -94,6 +104,8 @@ def get_delivery_data(day, session):
     # cache/return anything that ends up empty, so no header-only /
     # all-NaN frame ever gets written to disk or concatenated later
         df = df.dropna(subset=NUMERIC_COLS)
+
+        print("Rows after dropna:", len(df))
 
 # If no valid rows, don't cache it.
         if df.empty:
@@ -130,6 +142,11 @@ def main():
     s=create_session()
     days=get_last_days(TRADING_DAYS_LOOKBACK)
     data=download_all(days,s)
+    print("Number of DataFrames:", len(data))
+
+    for d in data:
+        print(d.shape)
+        
     if not data:
         print("No data");return
     df=pd.concat(data,ignore_index=True)
