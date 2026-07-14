@@ -93,17 +93,17 @@ def get_delivery_data(day, session):
     # drop rows missing the numerics we actually need -- and refuse to
     # cache/return anything that ends up empty, so no header-only /
     # all-NaN frame ever gets written to disk or concatenated later
-df = df.dropna(subset=NUMERIC_COLS)
+        df = df.dropna(subset=NUMERIC_COLS)
 
 # If no valid rows, don't cache it.
-if df.empty:
-    if os.path.exists(fp):
-        os.remove(fp)
-    return None
+        if df.empty:
+            if os.path.exists(fp):
+                os.remove(fp)
+            return None
+        
+        df.to_csv(fp, index=False)
 
-df.to_csv(fp, index=False)
-
-    return df
+        return df
 
 def download_all(days,session):
     out=[]
