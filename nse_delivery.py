@@ -87,35 +87,35 @@ def get_delivery_data(day, session):
         r = session.get(url, timeout=30)
         if r.status_code != 200 or "SYMBOL" not in r.text:
             return None
-        df = pd.read_csv(io.StringIO(r.text))
-        df.columns = df.columns.str.strip().str.upper().str.replace(" ", "_")
+    df = pd.read_csv(io.StringIO(r.text))
+    df.columns = df.columns.str.strip().str.upper().str.replace(" ", "_")
 
-        print("Rows before EQ filter:", len(df))
-        # strip values too, not just column names -- guards against a
-        # trailing-space "EQ " silently failing the series filter and
-        # producing a header-only cached file down the line
-        df["SERIES"] = df["SERIES"].astype(str).str.strip()
-        df = df[df["SERIES"] == "EQ"].copy()
-        df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
-        df["DATE"] = day
-        df = _coerce_numeric(df)
+    print("Rows before EQ filter:", len(df))
+    # strip values too, not just column names -- guards against a
+    # trailing-space "EQ " silently failing the series filter and
+    # producing a header-only cached file down the line
+    df["SERIES"] = df["SERIES"].astype(str).str.strip()
+    df = df[df["SERIES"] == "EQ"].copy()
+    df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
+    df["DATE"] = day
+    df = _coerce_numeric(df)
 
-    # drop rows missing the numerics we actually need -- and refuse to
-    # cache/return anything that ends up empty, so no header-only /
-    # all-NaN frame ever gets written to disk or concatenated later
-        df = df.dropna(subset=NUMERIC_COLS)
+# drop rows missing the numerics we actually need -- and refuse to
+# cache/return anything that ends up empty, so no header-only /
+# all-NaN frame ever gets written to disk or concatenated later
+    df = df.dropna(subset=NUMERIC_COLS)
 
-        print("Rows after dropna:", len(df))
+    print("Rows after dropna:", len(df))
 
 # If no valid rows, don't cache it.
-        if df.empty:
-            if os.path.exists(fp):
-                os.remove(fp)
-            return None
-        
-        df.to_csv(fp, index=False)
+    if df.empty:
+        if os.path.exists(fp):
+            os.remove(fp)
+        return None
+    
+    df.to_csv(fp, index=False)
 
-        return df
+    return df
 
 def download_all(days,session):
     out=[]
