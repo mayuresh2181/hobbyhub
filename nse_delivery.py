@@ -48,7 +48,7 @@ def create_session():
 
 def get_last_days(n):
     days=[]
-    d=dt.date.today()-dt.timedelta(days=1)
+    d=dt.date.today()
     while len(days)<n:
         if d.weekday()<5:
             days.append(d)
